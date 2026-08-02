@@ -1937,6 +1937,37 @@
         };
 
         // --- SISTEMA DE FACTURAS ---
+        window.getActiveUserId = function() {
+            if (window.currentAppUser && window.currentAppUser.id) return String(window.currentAppUser.id);
+            const storedUserId = sessionStorage.getItem('currentLocalUserId');
+            if (storedUserId) return String(storedUserId);
+            return 'sistema';
+        };
+
+        window.ensureClientRegistration = function({ nombre, cc, correo = '', tel = '', ciudad = '', userId } = {}) {
+            const safeUserId = String(userId || window.getActiveUserId());
+            const clientName = String(nombre || '').trim();
+            const clientDoc = String(cc || '').trim();
+            if (!clientName && !clientDoc) return null;
+
+            const baseId = clientDoc || clientName.replace(/\s+/g, '_');
+            const clienteDocId = `${safeUserId}_${baseId}`;
+            const clienteDocData = {
+                id: clienteDocId,
+                nombre: clientName,
+                correo: String(correo || '').trim(),
+                cc: clientDoc,
+                tel: String(tel || '').trim(),
+                ciudad: String(ciudad || '').trim(),
+                userId: safeUserId
+            };
+
+            if (!window.db.clientes) window.db.clientes = {};
+            window.db.clientes[clienteDocId] = clienteDocData;
+            window.persistLocalData();
+            return clienteDocData;
+        };
+
         window.generarPreview = async function() {
             const form = document.getElementById('invoiceForm');
             if (!form.checkValidity()) { form.reportValidity(); return; }
@@ -1945,7 +1976,7 @@
             const hasSaldo = window.currentAppUser.canViewSaldo === true;
             const abono = window.getRawValue(document.getElementById('monto').value);
             const saldo = hasSaldo ? window.getRawValue(document.getElementById('saldoPendienteInput').value) : 0;
-            const userId = window.currentAppUser ? window.currentAppUser.id : 'sistema';
+            const userId = window.getActiveUserId();
 
             const isEditing = !!window.editingInvoiceId;
             let fechaCreacion = new Date().toISOString();
@@ -1979,11 +2010,15 @@
             };
 
             try {
-                const docIdCliente = userId + "_" + String(docData.cc);
-                const clienteDocData = { id: docIdCliente, nombre: docData.cliente, correo: docData.correo, cc: docData.cc, userId: userId };
-                await setDoc(getDocPath("clientes", docIdCliente), clienteDocData);
+                const clienteDocData = window.ensureClientRegistration({
+                    nombre: docData.cliente,
+                    cc: docData.cc,
+                    correo: docData.correo,
+                    userId: userId
+                });
+                if (clienteDocData) await setDoc(getDocPath("clientes", clienteDocData.id), clienteDocData);
                 await setDoc(getDocPath("facturas", docData.id), docData);
-                window.applyLocalDocument('clientes', clienteDocData);
+                window.applyLocalDocument('clientes', clienteDocData || { id: `${userId}_${String(docData.cc || docData.cliente)}`, nombre: docData.cliente, correo: docData.correo, cc: docData.cc, userId: userId });
                 window.applyLocalDocument('facturas', docData);
 
                 // Mantener el id de la factura actual en modo edición para que el botón "Editar" de la vista previa funcione
@@ -2520,7 +2555,10 @@
             btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="animate-spin w-4 h-4 mr-2 inline-block flex-shrink-0" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> PROCESANDO...`;
             btn.disabled = true;
             
-            const userId = window.currentAppUser ? window.currentAppUser.id : 'sistema';
+            const userId = window.getActiveUserId();
+            const nombreCliente = (document.getElementById('cobro-cliente').value || '').trim();
+            const ccCliente = (document.getElementById('cobro-cc').value || '').trim();
+            const correoCliente = (document.getElementById('cobro-correo')?.value || '').trim();
             const numVal = document.getElementById('cobro-num').value;
             const isRetenciones = document.getElementById('cobro-toggle-retenciones').checked;
             const totalRete = window.getRawValue(document.getElementById('cobro-r-total').value);
@@ -2532,9 +2570,9 @@
             const docData = {
                 id: docId,
                 num: numVal,
-                cliente: document.getElementById('cobro-cliente').value,
+                cliente: nombreCliente,
                 fecha: document.getElementById('cobro-fecha').value,
-                cc: document.getElementById('cobro-cc').value,
+                cc: ccCliente,
                 tel: document.getElementById('cobro-tel').value,
                 ciudad: document.getElementById('cobro-ciudad').value,
                 concepto: document.getElementById('cobro-concepto').value,
@@ -2559,8 +2597,20 @@
             };
 
             try {
+                const clienteDocData = window.ensureClientRegistration({
+                    nombre: nombreCliente,
+                    cc: ccCliente,
+                    correo: correoCliente,
+                    tel: document.getElementById('cobro-tel').value || '',
+                    ciudad: document.getElementById('cobro-ciudad').value || '',
+                    userId: userId
+                });
+
+                if (clienteDocData) await setDoc(getDocPath("clientes", clienteDocData.id), clienteDocData);
+                window.applyLocalDocument('clientes', clienteDocData || { id: `${userId}_${ccCliente || nombreCliente || 'sin-documento'}`, nombre: nombreCliente, correo: correoCliente, cc: ccCliente, tel: document.getElementById('cobro-tel').value || '', ciudad: document.getElementById('cobro-ciudad').value || '', userId: userId });
                 await setDoc(getDocPath("cuentasCobro", docData.id), docData);
                 window.applyLocalDocument('cuentasCobro', docData);
+                if (typeof window.renderListas === 'function') window.renderListas();
                 window.editingCobroId = docData.id;
                 const renderEl = document.getElementById('cobro-render');
                 const pdfAsBlob = await window.generarBlobFactura(numVal, renderEl); 
